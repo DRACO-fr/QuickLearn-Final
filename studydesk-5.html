@@ -110,7 +110,7 @@ function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); r
 function persist() { saveData(state); }
 
 // ---------- AI ----------
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-3.6-flash";
 async function askGemini(prompt) {
   const key = getApiKey();
   if (!key) throw new Error("no-key");
