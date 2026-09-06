@@ -1,0 +1,30 @@
+{
+  "name": "Study Desk",
+  "short_name": "StudyDesk",
+  "description": "Create decks, turn notes into AI-generated flashcards, and study with spaced repetition and quizzes.",
+  "start_url": "./studydesk.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B0B0E",
+  "theme_color": "#7C5CFC",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
