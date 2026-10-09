@@ -635,17 +635,66 @@ async function scanImage(deckId, fileList){
 }
 
 /* ============================== QUIZ ============================== */
+// Build a shuffled list of question types so a quiz mixes multiple-choice,
+// typed-recall, and fill-in-the-blank questions instead of always MCQ.
+function buildQuizTypes(n){
+  const base = ["mcq","typed","fillblank"];
+  const types = [];
+  while(types.length < n) types.push(...base);
+  types.length = n;
+  for(let i=types.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [types[i],types[j]]=[types[j],types[i]]; }
+  return types;
+}
+// Pick the longest word in an answer to blank out for a fill-in-the-blank question.
+function pickBlankWord(answer){
+  const words = (answer||"").split(/\s+/).filter(Boolean);
+  if(!words.length) return { masked:"_____", blank: answer||"" };
+  let target = words[0];
+  for(const w of words){
+    const cw = w.replace(/[^A-Za-z0-9]/g,"");
+    const ct = target.replace(/[^A-Za-z0-9]/g,"");
+    if(cw.length > ct.length) target = w;
+  }
+  const idx = words.indexOf(target);
+  const maskedWords = words.slice();
+  maskedWords[idx] = "_____";
+  const blank = target.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g,"");
+  return { masked: maskedWords.join(" "), blank };
+}
 function startQuiz(deckId){
   const cards = [...deckCards(deckId)].sort(()=>Math.random()-.5).slice(0,8);
+  if(!cards.length) return;
   const others = data.cards.filter(c=>c.deckId!==deckId);
-  const questions = cards.map(c=>{
-    const pool = [...others, ...deckCards(deckId).filter(x=>x.id!==c.id)];
-    const wrong = [...new Set(pool.map(x=>x.answer))].filter(a=>a!==c.answer).sort(()=>Math.random()-.5).slice(0,3);
-    return { q:c.question, correct:c.answer, options:[...wrong, c.answer].sort(()=>Math.random()-.5) };
+  const types = buildQuizTypes(cards.length);
+  const questions = cards.map((c,i)=>{
+    const type = types[i];
+    if(type === "mcq"){
+      const pool = [...others, ...deckCards(deckId).filter(x=>x.id!==c.id)];
+      const wrong = [...new Set(pool.map(x=>x.answer))].filter(a=>a!==c.answer).sort(()=>Math.random()-.5).slice(0,3);
+      if(wrong.length < 1){
+        // Not enough other answers in the library to build a multiple-choice
+        // question — fall back to typed recall instead.
+        return { type:"typed", q:c.question, correct:c.answer };
+      }
+      return { type, q:c.question, correct:c.answer, options:[...wrong, c.answer].sort(()=>Math.random()-.5) };
+    }
+    if(type === "fillblank"){
+      const {masked, blank} = pickBlankWord(c.answer);
+      return { type, q:c.question, correct:c.answer, masked, blank };
+    }
+    return { type:"typed", q:c.question, correct:c.answer };
   });
   quizState = { questions, idx:0, score:0, deckId };
   renderQuiz();
 }
+function nextQuizQuestion(){ quizState.idx++; renderQuiz(); }
+function exitQuiz(deckId){
+  quizState = null;
+  location.hash = "#/deck/" + deckId;
+  renderDeck(deckId);
+  window.scrollTo(0,0);
+}
+const QUIZ_TYPE_LABEL = { mcq:"Multiple choice", typed:"Type the answer", fillblank:"Fill in the blank" };
 function renderQuiz(){
   const s = quizState;
   if(s.idx >= s.questions.length){
@@ -654,33 +703,87 @@ function renderQuiz(){
         <div style="font-size:2.5rem">🧠</div>
         <h1 style="font-size:1.4rem;margin-top:.5rem">Quiz done</h1>
         <p class="muted" style="margin-top:.5rem">You scored ${s.score} / ${s.questions.length}</p>
-        <button class="btn btn-primary" style="margin-top:1.25rem" onclick="go('#/deck/${s.deckId}')">Back to deck</button>
+        <button class="btn btn-primary" style="margin-top:1.25rem" onclick="exitQuiz('${s.deckId}')">Back to deck</button>
       </div>`;
     return;
   }
   const q = s.questions[s.idx];
-  view.innerHTML = `
-    <button class="backbtn" onclick="go('#/deck/${s.deckId}')">← End quiz</button>
+  const header = `
+    <button class="backbtn" onclick="exitQuiz('${s.deckId}')">← End quiz</button>
     <div class="row" style="justify-content:space-between;margin-top:.5rem">
       <h1 style="font-size:1.1rem">Quiz</h1>
       <span class="muted">${s.idx+1} / ${s.questions.length}</span>
     </div>
-    <div class="panel" style="margin-top:1rem">
+    <div class="muted" style="margin-top:.4rem;font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase">${QUIZ_TYPE_LABEL[q.type]}</div>
+    <div class="panel" style="margin-top:.5rem">
       <div style="font-weight:600;font-size:1.05rem;line-height:1.5">${esc(q.q)}</div>
-    </div>
-    <div style="margin-top:1rem" id="quizOpts">
-      ${q.options.map(o=>`<button class="quiz-opt" onclick="answerQuiz(this,'${esc(o).replace(/'/g,"\\'")}')">${esc(o)}</button>`).join("")}
     </div>`;
+
+  if(q.type === "mcq"){
+    view.innerHTML = header + `
+      <div style="margin-top:1rem" id="quizOpts">
+        ${q.options.map((o,i)=>`<button class="quiz-opt" onclick="answerMcq(this, ${i})">${esc(o)}</button>`).join("")}
+      </div>`;
+  } else if(q.type === "fillblank"){
+    view.innerHTML = header + `
+      <div class="panel" style="margin-top:1rem;font-size:1rem;line-height:1.6">${esc(q.masked)}</div>
+      <input class="input" id="blankInput" placeholder="Type the missing word…" style="margin-top:.75rem" autocomplete="off">
+      <button class="btn btn-primary" style="margin-top:.75rem;width:100%" id="blankCheckBtn" onclick="answerBlank()">Check</button>
+      <div id="quizFeedback" style="margin-top:.75rem"></div>`;
+    setTimeout(()=>document.getElementById("blankInput")?.focus(), 50);
+    document.addEventListener("keydown", quizEnterHandler);
+  } else {
+    view.innerHTML = header + `
+      <textarea class="input" id="typedInput" placeholder="Type what you remember…" style="margin-top:.75rem;min-height:5rem"></textarea>
+      <button class="btn btn-primary" style="margin-top:.75rem;width:100%" id="typedRevealBtn" onclick="revealTyped()">Reveal answer</button>
+      <div id="quizFeedback" style="margin-top:.75rem"></div>`;
+  }
 }
-function answerQuiz(btn, picked){
+function quizEnterHandler(e){
+  if(e.key==="Enter" && document.getElementById("blankInput")){
+    e.preventDefault(); answerBlank();
+  }
+}
+function answerMcq(btn, idx){
   const s = quizState, q = s.questions[s.idx];
+  const picked = q.options[idx];
   const opts = document.querySelectorAll(".quiz-opt");
   opts.forEach(b=>b.disabled = true);
   const correct = picked === q.correct;
   btn.classList.add(correct ? "correct" : "wrong");
   if(!correct) opts.forEach(b=>{ if(b.textContent === q.correct) b.classList.add("correct"); });
   if(correct) s.score++;
-  setTimeout(()=>{ s.idx++; renderQuiz(); }, 900);
+  setTimeout(nextQuizQuestion, 900);
+}
+function answerBlank(){
+  document.removeEventListener("keydown", quizEnterHandler);
+  const s = quizState, q = s.questions[s.idx];
+  const input = document.getElementById("blankInput");
+  const typed = (input.value||"").trim().toLowerCase();
+  const correct = typed.length>0 && typed === q.blank.trim().toLowerCase();
+  input.disabled = true;
+  document.getElementById("blankCheckBtn")?.setAttribute("disabled","disabled");
+  const fb = document.getElementById("quizFeedback");
+  fb.innerHTML = (correct
+    ? `<div class="panel" style="border-color:var(--success)"><span style="color:var(--success);font-weight:600">Correct!</span> ${esc(q.blank)}</div>`
+    : `<div class="panel" style="border-color:var(--destructive)"><span style="color:var(--destructive);font-weight:600">Not quite.</span> The missing word was "<strong>${esc(q.blank)}</strong>".</div>`)
+    + `<button class="btn btn-secondary" style="margin-top:.75rem;width:100%" onclick="nextQuizQuestion()">Next</button>`;
+  if(correct) s.score++;
+}
+function revealTyped(){
+  const q = quizState.questions[quizState.idx];
+  document.getElementById("typedInput").disabled = true;
+  document.getElementById("typedRevealBtn")?.setAttribute("disabled","disabled");
+  document.getElementById("quizFeedback").innerHTML = `
+    <div class="panel"><div class="muted" style="font-size:.75rem;margin-bottom:.3rem">Correct answer</div><div style="font-weight:600">${esc(q.correct)}</div></div>
+    <div class="row" style="margin-top:.75rem;gap:.5rem">
+      <button class="btn btn-success" style="flex:1" onclick="gradeTyped(true)">I got it right</button>
+      <button class="btn btn-danger" style="flex:1" onclick="gradeTyped(false)">I got it wrong</button>
+    </div>`;
+}
+function gradeTyped(correct){
+  if(correct) quizState.score++;
+  nextQuizQuestion();
 }
 
 /* ============================== ROUTER ============================== */
